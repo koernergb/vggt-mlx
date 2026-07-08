@@ -1,0 +1,168 @@
+# Build Brief & Repo Scaffold: Porting VGGT to Apple MLX (Minimum Lovable Port)
+
+## TL;DR
+- **A minimum-lovable MLX port of VGGT is feasible and well-scoped**: reimplement the DINOv2 ViT-L/14 patch embedder, the 24-layer alternating-attention Aggregator, and the Camera + Depth + Point-map heads in `mlx.nn`, load the 5.03 GB `facebook/VGGT-1B` safetensors after a mechanical key/transpose remap, and validate layer-by-layer against a Colab-T4 PyTorch reference. Skip the track head entirely.
+- **The hardest parts are the 2D-RoPE positional encoding, the alternating frame/global attention masking, and the DPT decoder's ConvTranspose/interpolation fusion** — all supported by MLX ops but requiring careful NCHW→NHWC layout and float32 discipline to hit parity.
+- **Run everything in float32.** The single biggest documented Apple-Silicon pitfall is that MPS fp16 autocast breaks VGGT — the jmanhype/vggt-mps README states verbatim: *"Uses float32 exclusively; MPS does not support float16 autocast for this model."* MLX has no autocast, but you should still force fp32 for parity and only experiment with bf16/fp16 after the fp32 gate passes.
+
+## Key Findings
+
+### 1. Architecture is fully recoverable from primary sources
+VGGT (arXiv:2503.11651, submitted 14 Mar 2025) won the **CVPR 2025 Best Paper Award** (announced June 13, 2025), authored by Jianyuan Wang, Minghao Chen, Nikita Karaev, Andrea Vedaldi, Christian Rupprecht, and David Novotny (Oxford VGG + Meta AI). It is a feed-forward transformer with four parts: a DINOv2 patch embedder, a 24-layer alternating-attention Aggregator, and DPT/transformer prediction heads. The official `VGGT.__init__` (verbatim from `vggt/models/vggt.py`) is:
+
+```python
+self.aggregator  = Aggregator(img_size=518, patch_size=14, embed_dim=1024)
+self.camera_head = CameraHead(dim_in=2*1024)                                        # 2048
+self.point_head  = DPTHead(dim_in=2048, output_dim=4, activation="inv_log", conf_activation="expp1")
+self.depth_head  = DPTHead(dim_in=2048, output_dim=2, activation="exp",     conf_activation="expp1")
+self.track_head  = TrackHead(dim_in=2048, patch_size=14)   # OUT OF SCOPE
+```
+
+All heads take `dim_in = 2*embed_dim = 2048` because the Aggregator concatenates frame-attention and global-attention outputs channel-wise.
+
+### 2. Weights: `facebook/VGGT-1B`, single 5.03 GB safetensors, ~1B (F32) params
+`model.safetensors` on `huggingface.co/facebook/VGGT-1B` (main) is **5.03 GB, tensor type F32, ~1B parameters**, saved with `pytorch_model_hub_mixin` (plain dotted-path keys, no remapping inside the checkpoint; SHA256 `5b906eb2…310478`). A `model.pt` pickle (5.03 GB, `torch.FloatStorage`) is also present. The original checkpoint is **CC-BY-NC-4.0 (non-commercial)**. Per the GitHub README: *"[July 29, 2025] We've updated the license for VGGT to permit commercial use (excluding military applications)… only the newly released checkpoint VGGT-1B-Commercial is licensed for commercial usage — the original checkpoint remains non-commercial."* The Commercial checkpoint is gated behind a LLaMA-style automatic approval form.
+
+### 3. MLX has every op VGGT needs
+`mlx.nn` provides `Module`, `Linear`, `LayerNorm`, `Conv2d`, `ConvTranspose2d` (contributed by Max-Heinrich Laves), `MultiHeadAttention`, `Upsample`, and `RoPE`; `mlx.core.fast.scaled_dot_product_attention` runs softmax in float32 regardless of input precision. Weight loading is `model.load_weights(list(params.items()))` or `model.update(tree_unflatten(list(mx.load("w.safetensors").items())))`.
+
+### 4. Existing MLX ports give reusable ViT patterns; a PyTorch/MPS VGGT port already exists as a reference
+`mlx-image` (riccardomusmeci) ships a working DINOv2 ViT-L/14 at 518px in MLX with automatic PyTorch→MLX weight conversion, validated against ImageNet-1K. `jmanhype/vggt-mps` is a PyTorch-MPS wrapper (not MLX) that documents the key pitfalls: float32 only, and a runtime sparse-attention patch giving *"O(n) memory scaling instead of O(n^2)"* with reported *"Output difference vs. standard attention: reported as 0.000000 in tests."*
+
+## Details
+
+### 1. VGGT architecture — exact specs for module stubs
+
+**Backbone (patch embedder).** DINOv2 ViT-L/14 **with registers** (`dinov2_vitl14_reg`). `PatchEmbed.proj = Conv2d(3, 1024, kernel_size=(14,14), stride=(14,14))`, norm = Identity, 24 internal blocks. Input images are isotropically resized so the long side is 518 and cropped to a multiple of 14; the demo hard-codes 518×518 → 37×37 = **1369 patch tokens**, embed dim **1024**.
+
+**Special tokens.** Per frame VGGT prepends **1 camera token + 4 register tokens = 5 special tokens**, so `patch_start_idx = 5`. The camera/register token parameters have a size-2 axis (`camera_token ≈ (1,2,1,1024)`, `register_token ≈ (1,2,4,1024)`): index 0 is the reference (first) frame's learned tokens, index 1 is shared by all other frames. This is how VGGT distinguishes the reference view that defines the world coordinate system — all views are aligned to the first image's camera pose. Register tokens are discarded after the aggregator; the camera token feeds the camera head.
+
+**Aggregator (alternating attention).** `depth=24` layers, each containing one **frame-wise** self-attention block (tokens attend only within their own image) and one **global** self-attention block (all tokens across all frames attend jointly) → 48 transformer blocks total. `embed_dim=1024`, `num_heads=16`, `mlp_ratio=4`, `qkv_bias=True`, LayerScale `init_values=0.01`, and a **2D Rotary Position Embedding** (`RotaryPositionEmbedding2D`, `rope_freq≈100`) plus a `PositionGetter` that produces (row,col) indices per patch. Alternating order is `aa_order=["frame","global"]`, `aa_block_size=1`. The aggregator returns `(aggregated_tokens_list, patch_start_idx)` where `len(aggregated_tokens_list)==24`; each entry has shape `[B, S, N_tokens, 2048]`. For a single image, global attention degenerates to frame attention — single-view "just works." (These `aggregator.py` literals are from consistent secondary sources; confirm verbatim in M0.)
+
+**Camera head** (`camera_head.py`). `CameraHead(dim_in=2048, trunk_depth=4, pose_encoding_type="absT_quaR_FoV")`. Pose encoding dim = **9** = translation (3) + quaternion (4, XYZW scalar-last) + field-of-view (2). It embeds a pose token via `embed_pose = Linear(9→2048)`, applies AdaLN modulation (`poseLN_modulation = Sequential(SiLU, Linear(2048→6144))`, `adaln_norm = LayerNorm(2048, eps=1e-6, affine=False)`), runs a 4-block transformer trunk iteratively (**4 refinement iterations**), and regresses via `pose_branch = Mlp(2048→1024→9)`. `pose_encoding_to_extri_intri(pose_enc, image_hw)` converts the 9-vector to OpenCV extrinsic `[B,S,3,4]` and intrinsic `[B,S,3,3]`.
+
+**Depth & point heads** (`dpt_head.py`, fetched verbatim). `DPTHead(dim_in=2048, patch_size=14, features=256, out_channels=[256,512,1024,1024], intermediate_layer_idx=[4,11,17,23])`:
+- `norm = LayerNorm(2048)`; slices `tokens[:, :, patch_start_idx:]` to drop the 5 special tokens.
+- `projects = [Conv2d(2048→oc, k=1) for oc in [256,512,1024,1024]]`.
+- `resize_layers = [ConvTranspose2d(256,256,k=4,s=4), ConvTranspose2d(512,512,k=2,s=2), Identity(), Conv2d(1024,1024,k=3,s=2,p=1)]` — reassembles tokens from layers 4/11/17/23 into a 4-level feature pyramid.
+- `scratch` with `refinenet1..4` fusion blocks (refinenet4 has `has_residual=False`), then `output_conv1 = Conv2d(256→128,k=3,p=1)` and `output_conv2 = Sequential(Conv2d(128→32,k=3,p=1), ReLU, Conv2d(32→output_dim,k=1))`.
+- **depth_head: `output_dim=2`** (1 depth + 1 conf), `activation="exp"`. Output `depth [B,S,H,W,1]`, `depth_conf [B,S,H,W]`.
+- **point_head: `output_dim=4`** (3 xyz + 1 conf), `activation="inv_log"`. Output `world_points [B,S,H,W,3]`, `world_points_conf [B,S,H,W]`.
+
+For a 518-based, 3-view input: `pose_enc (1,3,9)`, `extrinsic (1,3,3,4)`, `intrinsic (1,3,3,3)`, `depth_map (1,3,294,518,1)` (a third-party walkthrough shows non-square 294×518 after preprocessing). The paper notes point maps derived by unprojecting predicted depth + camera (`unproject_depth_map_to_point_map`) are more accurate than the point head's direct output — so the depth head + camera head are the priority for a lovable demo.
+
+**forward() return dict keys** (verbatim): `pose_enc`, `depth`, `depth_conf`, `world_points`, `world_points_conf`, `track`/`vis`/`conf` (track only), `images`.
+
+### 2. Weight structure / state-dict keys for the remap table
+Top-level prefixes: `aggregator.`, `camera_head.`, `depth_head.`, `point_head.`, `track_head.`. Representative keys (verify block-container names by printing `model.state_dict().keys()`):
+```
+aggregator.camera_token
+aggregator.register_token
+aggregator.patch_embed.patch_embed.proj.weight
+aggregator.patch_embed.blocks.0.attn.qkv.weight
+aggregator.frame_blocks.0.attn.qkv.weight
+aggregator.global_blocks.0.mlp.fc2.weight
+camera_head.embed_pose.weight
+camera_head.pose_branch.fc2.weight
+depth_head.projects.0.weight
+depth_head.scratch.output_conv2.2.weight   # out-channels 2
+point_head.scratch.output_conv2.2.weight    # out-channels 4
+```
+**Conversion rules (standard PyTorch→MLX):** (a) `nn.Linear` weights are stored `[out,in]` in both frameworks — MLX `Linear` uses the same layout, so **no transpose needed** for Linear; confirm by shape-checking. (b) **Conv2d/ConvTranspose2d** weights must be permuted from PyTorch `[out,in,kh,kw]` to MLX NHWC-style `[out,kh,kw,in]`. (c) LayerNorm weight/bias map directly. Build a dict of `{torch_key: mlx_key}` plus a per-key transpose function; save out an MLX-native safetensors so the port loads in one call. Tools like `torch2mlx` (registry of 72 layer types, 7 transposition rules) can bootstrap this but hand-verify Conv layouts.
+
+### 3. MLX API specifics (as of MLX ~0.31, 2026)
+- `mlx.core.fast.scaled_dot_product_attention(q,k,v,*,scale,mask=None|"causal"|array)` — softmax in fp32; use an additive mask (`-inf`/large-negative at disallowed positions) for the frame-wise attention block. Shapes `(B, N_heads, T, D)`.
+- `mlx.nn.MultiHeadAttention(dims, num_heads, ...)` takes an **additive** mask broadcastable to `(B, num_heads, Tq, Tk)`. For VGGT's fused `qkv` you'll likely write a custom attention module (split qkv, reshape to heads, apply 2D-RoPE, call `mx.fast.scaled_dot_product_attention`) rather than use the stock MHA, to match the checkpoint's `attn.qkv.weight`/`attn.proj.weight` layout.
+- `mlx.nn.RoPE` exists but is 1D; VGGT's **2D axial RoPE** (separate x/y rotations over half the head dims each) must be reimplemented — reuse the pattern from mlx-image / DINOv2 ports.
+- `mlx.nn.Conv2d`/`mlx.core.conv2d`/`conv_transpose2d` all present. Channels are **last** (NHWC) in MLX.
+- `mlx.nn.Upsample(scale_factor, mode="nearest"|"linear")` for any bilinear resize in the DPT head; note MLX bilinear may differ from PyTorch `align_corners=False` at sub-pixel level — a known parity risk.
+- Loading: `mx.load("model.safetensors")` → dict; `model.load_weights(list(d.items()), strict=True)` validates exact key/shape match.
+
+### 4. Reusable porting patterns
+- **mlx-image** (riccardomusmeci): working DINOv2 ViT-L/14 at 518px in MLX, with automatic `.pth`→`.safetensors` conversion validated against ImageNet-1K. Reuse its `PatchEmbed`, attention, and LayerScale modules as the backbone starting point. The HF weights `mlx-vision/vit_base_patch14_518.dinov2-mlxim` show the naming/inference API.
+- **mlx-vlm / mlx-examples**: reference for `Module` structure, weight-conversion scripts (`map_torch_to_mlx`), and the `tree_unflatten` load pattern.
+- **jmanhype/vggt-mps**: not MLX, but the closest existing Apple-Silicon VGGT port. Key lessons: force float32; sparse-attention runtime patch for large N; vendored upstream VGGT snapshot.
+- **DPT decoder**: the upstream `dpt_head.py` is the canonical reference; DepthAnythingV2 / MoGe DPT heads share the reassemble+fusion structure.
+
+### 5. Parity / validation approach
+Adopt the **oracle fixture** pattern (as used in the dots-tts-mlx MLX port): a dev-only `tools/oracle.py` runs the PyTorch reference on Colab T4 and dumps intermediate activations (post-patch-embed, after each of layers 4/11/17/23, camera pose_enc, final depth) to `.npz`. The MLX port loads the same fixtures and asserts `max_abs_diff` per stage.
+- **Thresholds**: fp32 CPU PyTorch vs MLX fp32 — expect per-layer max-abs-diff ~1e-4–1e-3; a good gate is `< 1e-3` per intermediate and `< 1e-2` on final depth. **Caveat (documented in dots-tts-mlx):** MLX's fast matmul rounds fp32 operands to ~tf32 (10-bit mantissa) on GPU, so deep stacks accumulate error; isolate each stage with a high-precision reference rather than expecting sample-exact end-to-end parity. Run parity on CPU (`mx.set_default_device(mx.cpu)`) first to remove the tf32 floor.
+- Note that upstream VGGT itself runs mixed precision on CUDA (`dtype = torch.bfloat16 if get_device_capability()[0] >= 8 else torch.float16`, under `torch.cuda.amp.autocast`), so generate your oracle fixtures in **fp32** (disable autocast) to have a clean reference.
+- Capture PyTorch intermediates with forward hooks on `aggregator.patch_embed`, `aggregator.frame_blocks[i]`, `aggregator.global_blocks[i]`, `camera_head`, `depth_head`.
+- **Test data**: the repo `examples/` folder (kitchen scene), Co3D sequences (bear/apple), and single-image demo photos. Start with 1 image, then 2–4.
+
+### 6. Known pitfalls (Apple Silicon / MLX)
+1. **fp16/autocast**: never use fp16 autocast; VGGT trains with bf16 on Ampere but on Apple you should port in fp32 (vggt-mps confirms MPS breaks with fp16 autocast for this model).
+2. **tf32 matmul floor** on MLX GPU — validate on CPU for tight parity, accept looser GPU thresholds.
+3. **NCHW vs NHWC**: every Conv/ConvTranspose weight needs permutation and every feature map is channels-last in MLX; the DPT reassemble stage is the most error-prone.
+4. **Bilinear interpolation mismatch**: MLX `Upsample` vs PyTorch `F.interpolate(align_corners=False)` can differ; prefer matching modes and test the DPT upsample in isolation.
+5. **2D-RoPE**: must be reimplemented exactly (axial x/y split, frequency base ~100); a wrong frequency or axis order silently degrades geometry.
+6. **Attention numerical stability**: use `mx.fast.scaled_dot_product_attention` (fp32 softmax) and additive masks; a boolean-mask edge case in MLX SDPA historically zeroed rows differently from PyTorch — verify frame masking on a tiny fixture.
+7. **Unified-memory limits**: global attention is O((N·L)²); at 518px each image is ~1374 tokens, so 4 views ≈ 5500 tokens is fine on 16 GB, but 20+ views will pressure memory. Keep MLP scope to ≤8 views.
+
+## Repository Scaffold
+
+```
+vggt-mlx/
+├── README.md                      # one-command demo instructions + license note
+├── pyproject.toml                 # deps: mlx>=0.31, numpy, pillow, huggingface_hub
+├── vggt_mlx/
+│   ├── __init__.py
+│   ├── config.py                  # VGGTConfig dataclass (img_size=518, patch_size=14,
+│   │                              #   embed_dim=1024, depth=24, num_heads=16,
+│   │                              #   num_register_tokens=4, patch_start_idx=5, rope_freq=100)
+│   ├── layers/
+│   │   ├── attention.py           # fused-qkv attention + 2D-RoPE, frame & global variants
+│   │   ├── rope2d.py              # RotaryPositionEmbedding2D + PositionGetter
+│   │   ├── block.py               # transformer Block w/ LayerScale(init 0.01), MLP
+│   │   ├── patch_embed.py         # Conv2d(3,1024,14,14) + DINOv2 blocks (reuse mlx-image)
+│   │   └── mlp.py
+│   ├── models/
+│   │   ├── aggregator.py          # Aggregator: patch_embed + 24×(frame,global) + camera/register tokens
+│   │   └── vggt.py                # VGGT: aggregator + camera_head + depth_head + point_head
+│   ├── heads/
+│   │   ├── camera_head.py         # trunk_depth=4, AdaLN, pose 9-vec, 4 refine iters
+│   │   └── dpt_head.py            # reassemble + refinenet fusion + output_conv (output_dim 2 or 4)
+│   ├── utils/
+│   │   ├── pose_enc.py            # pose_encoding_to_extri_intri (quat+T+FoV → OpenCV E/K)
+│   │   ├── geometry.py            # unproject_depth_map_to_point_map
+│   │   └── load_fn.py             # load_and_preprocess_images (resize long side→518, /14 crop)
+│   └── convert/
+│       └── torch_to_mlx.py        # key remap + Conv permute; writes vggt-1b-mlx.safetensors
+├── tools/
+│   └── oracle.py                  # (Colab/T4) dump PyTorch reference activations to .npz (fp32)
+├── tests/
+│   ├── test_patch_embed_parity.py
+│   ├── test_aggregator_parity.py  # layers 4/11/17/23 max_abs_diff < 1e-3
+│   ├── test_camera_head_parity.py
+│   ├── test_depth_head_parity.py
+│   └── fixtures/                  # .npz oracle dumps + sample images
+├── demo.py                        # one-command: image(s) → depth PNG + point cloud PLY
+└── weights/                       # vggt-1b-mlx.safetensors (gitignored)
+```
+
+### Milestone gates / task cards
+- **M0 – Reference & harness (T4 Colab).** Run upstream VGGT on 1 + 3 images (fp32, no autocast); dump activations via `oracle.py`; print `model.state_dict().keys()` to lock unverified literals. Gate: PyTorch runs, shapes + key names recorded, fixtures committed.
+- **M1 – Weight conversion.** `torch_to_mlx.py` produces an MLX safetensors; `model.load_weights(..., strict=True)` succeeds against skeleton stubs. Gate: zero missing/unexpected keys.
+- **M2 – Patch embed parity.** Gate: max_abs_diff < 1e-4 (CPU) on patch tokens.
+- **M3 – Aggregator parity.** Implement 2D-RoPE, frame & global attention, LayerScale. Gate: layers 4/11/17/23 max_abs_diff < 1e-3 (CPU) for 1 and 3 views.
+- **M4 – Camera head + depth head parity.** Gate: pose_enc < 1e-3; depth < 1e-2; extrinsics/intrinsics visually correct.
+- **M5 – One-command demo.** `python demo.py img1.jpg img2.jpg` → depth maps + unprojected point cloud PLY. Gate: runs on MacBook in fp32, output visually matches reference.
+- **M6 (stretch, shelved).** Point head polish; then track head (explicitly out of scope).
+
+**Benchmarks that change the plan:** if M3 CPU parity fails > 1e-2, suspect RoPE frequency/axis or qkv layout before anything else. If GPU parity is loose but CPU is tight, it's the tf32 floor — ship with CPU-validated gates and document GPU as "visually equivalent." If 8-view inference OOMs on 16 GB, cap the demo at 4 views.
+
+## Recommendations
+1. **Do M0 first — 30 minutes that de-risks the whole port.** Clone upstream VGGT and print `model.state_dict().keys()` plus each `Aggregator`/`DPTHead`/`CameraHead` submodule to lock the last unverified literals (`aa_order`, `aa_block_size`, `rope_freq`, `qk_norm`, exact `camera_token`/`register_token` shapes, `frame_blocks`/`global_blocks` container names).
+2. **Reuse mlx-image's DINOv2 ViT-L/14** for the patch embedder rather than writing it from scratch — it's already parity-validated at 518px.
+3. **Build the parity harness (M0/M2) before writing the aggregator.** The oracle-fixture pattern is what separates a working port from a plausible-looking-but-wrong one.
+4. **Port and validate in float32 on CPU first**, then move to GPU and accept looser thresholds; only try bf16 after fp32 ships.
+5. **Prioritize depth_head + camera_head** for the lovable demo; unproject depth for the point cloud (more accurate than the point head anyway per the paper). Treat point_head as M6 polish.
+6. **Redistribution / licensing**: because the original `facebook/VGGT-1B` weights are CC-BY-NC-4.0, publish only the conversion *script* and instructions, not converted weights — or use the gated `VGGT-1B-Commercial` checkpoint and honor its "no military use" terms. State the license clearly in your README.
+
+## Caveats
+- The exact `aggregator.py` `__init__` literals (`aa_order`, `aa_block_size`, `rope_freq`, `qk_norm`) and the precise `camera_token`/`register_token` Parameter shapes and state-dict container names (`frame_blocks`/`global_blocks`) were reconstructed from consistent secondary sources, not read verbatim — confirm by reading the file directly (M0). The `vggt.py`, `dpt_head.py`, and `camera_head.py` details above were confirmed from source.
+- Demo tensor shapes (e.g., `depth_map (1,3,294,518,1)`) come from a third-party walkthrough (LearnOpenCV) reflecting non-square preprocessing; your shapes depend on `load_and_preprocess_images` mode.
+- MLX API details reflect ~v0.31 (2026 docs); pin your MLX version since the API still moves.
+- Parity thresholds are heuristics from analogous MLX ports (dots-tts-mlx), not VGGT-specific published numbers; calibrate against your own oracle.
+- VGGT-Omega (released May 18, 2026, per the upstream README) and various speedups (FastVGGT, Sparse-VGGT, FlashVGGT) exist but are out of scope for a v1 port; a May 15, 2026 upstream memory fix also lets stock VGGT run ~2–3× more frames per GPU-memory budget.
