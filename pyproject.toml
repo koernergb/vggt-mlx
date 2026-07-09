@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vggt-mlx"
+version = "0.0.0"
+description = "Apple MLX port of VGGT."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "mlx>=0.31",
+    "numpy",
+    "pillow",
+    "huggingface_hub",
+    "pytest",
+]
+
+[project.optional-dependencies]
+dev = [
+    "torch",
+]
+colab = [
+    "torch",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["vggt_mlx"]
