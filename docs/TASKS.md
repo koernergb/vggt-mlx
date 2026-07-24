@@ -7,7 +7,8 @@
 1. **Float32 everywhere; validate parity on CPU.** Set `mx.set_default_device(mx.cpu)` in every parity test. MLX's fast matmul rounds fp32 operands to ~tf32 (10-bit mantissa) on GPU, so deep stacks drift — CPU removes that floor. Only try GPU / bf16 / fp16 *after* the fp32 gate is green, as a separate experiment. Never rely on autocast (VGGT breaks under MPS fp16 autocast).
 2. **Weight layout conversion:**
    - `nn.Linear`: PyTorch stores `[out, in]`; MLX `Linear` uses the **same** `[out, in]` → **no transpose**. Shape-check to confirm.
-   - `nn.Conv2d` / `nn.ConvTranspose2d`: permute PyTorch `[out, in, kh, kw]` → MLX `[out, kh, kw, in]`.
+   - `nn.Conv2d`: permute PyTorch `[out, in, kh, kw]` → MLX `[out, kh, kw, in]` with `(0,2,3,1)`.
+   - `nn.ConvTranspose2d`: PyTorch stores `[in, out/groups, kh, kw]`; for the ungrouped layers used here, permute to MLX `[out, kh, kw, in]` with `(1,2,3,0)`.
    - Feature maps in MLX are **NHWC** (channels last). LayerNorm weight/bias map 1:1.
 3. **Attention:** use `mx.fast.scaled_dot_product_attention(q, k, v, scale=..., mask=...)` (softmax runs in fp32). Use **additive** masks (large-negative at disallowed positions), shapes `(B, n_heads, T, D)`.
 4. **Source of truth beats this file.** The `vggt.py`, `dpt_head.py`, and `camera_head.py` specs below are confirmed from upstream source. The **Aggregator literals** (`aa_order`, `aa_block_size`, `rope_freq`, `qk_norm`, exact `camera_token`/`register_token` shapes, `frame_blocks`/`global_blocks` container names) are *reconstructed* — **Card 0.2 dumps the real values and every M3 card must reconcile against that dump before coding.**
@@ -139,7 +140,7 @@ vggt-mlx/
 **Spec / steps:**
 1. Load the torch state dict (from the `.pt`/`safetensors` downloaded on Colab, or via `huggingface_hub`).
 2. Build `{torch_key: mlx_key}`. Prefixes stay the same (`aggregator.`, `camera_head.`, `depth_head.`, `point_head.`; **drop** `track_head.*` — out of scope). Only rename where MLX module attribute names differ from your implementation (reconcile against `state_dict_keys.txt`).
-3. Per-key transform: **Linear → identity** (verify `[out,in]`); **Conv2d/ConvTranspose2d → permute** `(0,2,3,1)`; LayerNorm/params → identity.
+3. Per-key transform: **Linear → identity** (verify `[out,in]`); **Conv2d → permute** `(0,2,3,1)`; **ConvTranspose2d → permute** `(1,2,3,0)`; LayerNorm/params → identity.
 4. Write `weights/vggt-1b-mlx.safetensors` via `mx.save_safetensors`.
 5. Emit a `conversion_report.txt`: count of keys mapped, skipped (track head), and any shape mismatches.
 
