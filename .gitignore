@@ -5,6 +5,8 @@ __pycache__/
 .venv/
 weights/
 *.npz
+!tests/fixtures/oracle_1view.npz
+!tests/fixtures/oracle_3view.npz
 *.safetensors
 *.pt
 output/
