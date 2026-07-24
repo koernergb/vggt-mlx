@@ -206,7 +206,7 @@ vggt-mlx/
 
 **Files (edit):** `vggt_mlx/layers/rope2d.py`
 
-**Spec:** `RotaryPositionEmbedding2D(dim, base=<rope_freq from 0.2>)` applying rotation to Q/K; `PositionGetter` returns per-patch `(row, col)` on the 37×37 grid. Split head_dim in half → x-freqs and y-freqs.
+**Spec:** `RotaryPositionEmbedding2D(frequency=<rope_freq from 0.2>)` applies rotation to Q/K and infers the head dimension at call time; `PositionGetter` returns per-patch `(row, col)` on the 37×37 grid. Split head_dim in half → row/y frequencies followed by column/x frequencies, matching upstream `rope.py`.
 
 **Pitfalls:** wrong frequency base or swapped x/y axis **silently** degrades geometry (no crash). Add a standalone unit test: rotating by known angles matches a hand-computed reference for a 4-dim toy case.
 
