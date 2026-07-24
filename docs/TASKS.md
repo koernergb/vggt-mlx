@@ -76,17 +76,16 @@ vggt-mlx/
 **Files (create):** `tools/introspect.py`, `tests/fixtures/state_dict_keys.txt`, `tests/fixtures/module_repr.txt`, `tests/fixtures/ARCH_NOTES.md`
 
 **Steps:**
-1. `pip install vggt` (or clone `facebookresearch/vggt`), then:
+1. `pip install vggt` (or clone `facebookresearch/vggt`), then run:
    ```python
-   from vggt.models.vggt import VGGT
-   m = VGGT.from_pretrained("facebook/VGGT-1B").eval()
-   open("state_dict_keys.txt","w").write("\n".join(f"{k}\t{tuple(v.shape)}" for k,v in m.state_dict().items()))
-   open("module_repr.txt","w").write(repr(m))
+   python tools/introspect.py
    ```
+   Use `python tools/introspect.py --no-pretrained` for an architecture-only
+   smoke test that does not download the checkpoint.
 2. From the repr + `aggregator.py` source, **write down the real values** into `ARCH_NOTES.md`: `aa_order`, `aa_block_size`, `rope_freq`, whether `qk_norm` is used, LayerScale `init_values`, the exact **shapes** of `camera_token` and `register_token`, and the **container names** for the frame vs global block lists (e.g. `frame_blocks` / `global_blocks` vs something else).
 3. Note the two-slot special-token trick (index 0 = reference frame, index 1 = other frames) and confirm `patch_start_idx`.
 
-**Pitfalls:** the model download is ~5 GB (gated? use the non-commercial `facebook/VGGT-1B`). Do this on Colab, commit only the small text files (not weights).
+**Pitfalls:** the model download is ~5 GB (gated? use the non-commercial `facebook/VGGT-1B`). Do this on Colab, commit only the small text files (not weights). The default patch embedder is the full DINOv2 ViT-L/14-with-registers module (including its 24 blocks), not only its projection convolution.
 
 **Acceptance (gate):**
 - [ ] `state_dict_keys.txt` and `module_repr.txt` committed and non-empty.
