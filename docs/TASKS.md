@@ -218,7 +218,7 @@ vggt-mlx/
 ### Card 3.2 — Fused-QKV attention (frame + global)
 **Depends on:** 3.1 · **Milestone:** M3
 
-**Objective:** One attention module matching the checkpoint's `attn.qkv.weight` / `attn.proj.weight` layout, usable in both frame-wise and global modes.
+**Objective:** One attention module matching the checkpoint's `attn.qkv.weight` / `attn.proj.weight` layout. As in upstream, the aggregator selects frame-wise versus global scope by reshaping the input stream before calling the shared module.
 
 **Files (edit):** `vggt_mlx/layers/attention.py`
 
@@ -226,10 +226,10 @@ vggt-mlx/
 1. `qkv = Linear(1024, 3072, bias=True)`; split → q,k,v; reshape to `(B, n_heads=16, T, 64)`.
 2. Apply 2D RoPE to q,k (Card 3.1).
 3. Call `mx.fast.scaled_dot_product_attention(q,k,v, scale=1/sqrt(64), mask=mask)`; `proj = Linear(1024,1024)`.
-4. **Frame mode:** reshape so attention is within each image's tokens only (batch the frame axis, or block-diagonal additive mask). **Global mode:** all tokens across all frames attend jointly (no mask, or full).
+4. **Frame scope:** the aggregator supplies `(B*S,P,C)`, batching frames independently. **Global scope:** it supplies `(B,S*P,C)`, allowing all frame tokens to attend jointly. No mask is needed for either upstream path.
 5. Respect `qk_norm` if `ARCH_NOTES.md` says it's on.
 
-**Pitfalls:** MLX SDPA with boolean masks historically zeroed disallowed rows differently from PyTorch — use **additive** `-inf`/large-negative masks and verify on a 2-token toy fixture. Keep everything fp32.
+**Pitfalls:** if an explicit mask is added for a future path, use an additive `-inf`/large-negative mask rather than a boolean mask. The released upstream frame/global paths use reshaping and no mask. Keep everything fp32.
 
 **Acceptance (gate):**
 - [ ] `pytest tests/test_attention.py` — frame-mode on a 2-frame toy input equals a manual per-frame reference to 1e-5; global-mode equals full-attention reference.
@@ -243,7 +243,7 @@ vggt-mlx/
 
 **Files (edit):** `vggt_mlx/layers/block.py`
 
-**Spec:** pre-norm LayerNorm; `Mlp(1024→4096→1024)` GELU; LayerScale `init_values=<from 0.2>` (per-channel learned scale). Block must accept a `mode` (frame/global) forwarded to attention.
+**Spec:** pre-norm LayerNorm; `Mlp(1024→4096→1024)` GELU; LayerScale `init_values=<from 0.2>` (per-channel learned scale). The block accepts positions and operates on the stream shape prepared by the aggregator; it does not receive a frame/global mode flag.
 
 **Acceptance (gate):** deferred to 3.5 (block is exercised inside the Aggregator parity test).
 
