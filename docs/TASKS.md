@@ -259,7 +259,7 @@ vggt-mlx/
 **Spec / steps:**
 1. Learned params `camera_token` and `register_token` with the **two-slot** shapes from 0.2 (slot 0 = reference/first frame, slot 1 = broadcast to all others). Prepend **5** special tokens per frame (`patch_start_idx=5`).
 2. Loop `depth=24`; per layer apply order `aa_order` with `aa_block_size` (from 0.2 — typically one frame block then one global block).
-3. Collect the output tokens **after each layer** into `aggregated_tokens_list` (len 24). Each entry is fed later to the DPT heads at indices 4/11/17/23. Return `(aggregated_tokens_list, patch_start_idx)`.
+3. Return an `aggregated_tokens_list` of length 24. Matching current upstream, cache concatenated frame/global outputs only at indices 4/11/17/23 (and always the final layer); uncached entries are `None` so indices remain stable. Return `(aggregated_tokens_list, patch_start_idx)`.
 4. Single-image case: global attention degenerates to frame attention — must still run.
 
 **Pitfalls:** the concat that makes heads see 2048 dims happens here (frame-attn output ‖ global-attn output). Get the concat axis/order right or every head misaligns. Unified-memory: 4 views ≈ 5.5k tokens is fine on 16 GB; don't test with 20+ views.
