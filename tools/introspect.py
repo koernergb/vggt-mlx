@@ -2,7 +2,8 @@
 
 This script is intended to run in the upstream VGGT/Colab environment:
 
-    pip install vggt
+    git clone https://github.com/facebookresearch/vggt.git /tmp/upstream-vggt
+    pip install -e /tmp/upstream-vggt
     python tools/introspect.py
 
 By default it loads ``facebook/VGGT-1B`` so the emitted state-dict inventory is
@@ -13,6 +14,7 @@ the script without downloading the roughly 5 GB checkpoint.
 from __future__ import annotations
 
 import argparse
+import inspect
 import math
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -36,13 +38,15 @@ def _shape(value: Any) -> tuple[int, ...]:
     return tuple(int(dimension) for dimension in value.shape)
 
 
-def _layerscale_init(block: Any) -> float:
-    """Read LayerScale initialization from either known upstream layout."""
-    for attribute in ("gamma", "lambda1"):
-        value = getattr(block.ls1, attribute, None)
-        if value is not None:
-            return float(value.detach().flatten()[0].cpu())
-    raise RuntimeError("Could not find the LayerScale parameter on frame_blocks[0].ls1")
+def _constructor_default(instance: Any, parameter_name: str) -> Any:
+    """Read an architecture literal without confusing it with trained weights."""
+    parameter = inspect.signature(type(instance).__init__).parameters.get(parameter_name)
+    if parameter is None or parameter.default is inspect.Parameter.empty:
+        raise RuntimeError(
+            f"Could not read constructor default {parameter_name!r} from "
+            f"{type(instance).__name__}"
+        )
+    return parameter.default
 
 
 def inspect_architecture(model: Any) -> dict[str, Any]:
@@ -50,7 +54,9 @@ def inspect_architecture(model: Any) -> dict[str, Any]:
     first_block = aggregator.frame_blocks[0]
     rope = aggregator.rope
 
-    frequency = getattr(rope, "base", None)
+    frequency = getattr(rope, "base_frequency", None)
+    if frequency is None:
+        frequency = getattr(rope, "base", None)
     if frequency is None:
         frequency = getattr(rope, "frequency", None)
     if frequency is None:
@@ -65,7 +71,9 @@ def inspect_architecture(model: Any) -> dict[str, Any]:
         "aa_block_size": int(aggregator.aa_block_size),
         "rope_freq": int(frequency),
         "qk_norm": not first_block.attn.q_norm.__class__.__name__ == "Identity",
-        "layerscale_init": _layerscale_init(first_block),
+        # A pretrained gamma contains learned values. Card 0.2 needs the
+        # constructor literal that created LayerScale, not gamma[0].
+        "layerscale_init": float(_constructor_default(aggregator, "init_values")),
         "camera_token_shape": _shape(aggregator.camera_token),
         "register_token_shape": _shape(aggregator.register_token),
         "frame_blocks_container": "frame_blocks",
@@ -165,7 +173,8 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         from vggt.models.vggt import VGGT
     except ImportError as error:
         raise SystemExit(
-            "The upstream `vggt` package is required. Install it with `pip install vggt`."
+            "The upstream `vggt` package is required. Clone "
+            "https://github.com/facebookresearch/vggt and install it with `pip install -e`."
         ) from error
 
     model = VGGT() if args.no_pretrained else VGGT.from_pretrained(args.model_id)

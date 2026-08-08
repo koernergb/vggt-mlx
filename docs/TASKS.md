@@ -77,8 +77,11 @@ vggt-mlx/
 **Files (create):** `tools/introspect.py`, `tests/fixtures/state_dict_keys.txt`, `tests/fixtures/module_repr.txt`, `tests/fixtures/ARCH_NOTES.md`
 
 **Steps:**
-1. `pip install vggt` (or clone `facebookresearch/vggt`), then run:
+1. Clone `facebookresearch/vggt` and install it editable (the package is not
+   published on PyPI), then run:
    ```python
+   git clone https://github.com/facebookresearch/vggt.git /tmp/upstream-vggt
+   pip install -e /tmp/upstream-vggt
    python tools/introspect.py
    ```
    Use `python tools/introspect.py --no-pretrained` for an architecture-only
