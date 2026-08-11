@@ -43,3 +43,12 @@ def test_small_aggregator_returns_cached_frame_global_concatenations():
     # Four patch tokens plus five special tokens, frame/global concatenated.
     assert outputs[0].shape == (1, 2, 9, 16)
     assert outputs[1].shape == (1, 2, 9, 16)
+
+
+def test_aggregator_validates_image_layout_and_patch_multiple():
+    config = replace(VGGTConfig(), img_size=28, embed_dim=8, depth=2, num_heads=2)
+    model = Aggregator(config)
+    with pytest.raises(ValueError, match="expects"):
+        model(mx.zeros((1, 28, 28, 3)))
+    with pytest.raises(ValueError, match="divisible"):
+        model(mx.zeros((1, 1, 27, 28, 3)))
