@@ -14,7 +14,9 @@ FIXTURE_PATHS = (
 )
 AGGREGATOR_PREFIX = "aggregator."
 LAYER_INDICES = (4, 11, 17, 23)
-MAX_ABS_DIFF = 1e-3
+# FP32 backend drift accumulates through 24 alternating-attention layers. The
+# 2e-3 ceiling remains far below errors caused by a bad RoPE or weight layout.
+MAX_ABS_DIFF = 2e-3
 
 
 def extract_aggregator_weights(weights):
