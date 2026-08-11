@@ -4,8 +4,39 @@ from __future__ import annotations
 
 import mlx.core as mx
 import mlx.nn as nn
+import numpy as np
 
 from vggt_mlx.layers.mlp import Mlp
+
+
+def _cubic_kernel(distance: np.ndarray) -> np.ndarray:
+    """PyTorch's antialiased bicubic kernel (Keys cubic with a=-0.5)."""
+    distance = np.abs(distance)
+    near = 1.5 * distance**3 - 2.5 * distance**2 + 1.0
+    far = -0.5 * distance**3 + 2.5 * distance**2 - 4.0 * distance + 2.0
+    return np.where(distance < 1.0, near, np.where(distance < 2.0, far, 0.0))
+
+
+def _antialiased_bicubic_matrix(input_size: int, output_size: int):
+    """Build the separable resize matrix used by torch bicubic+antialias."""
+    scale = input_size / output_size
+    kernel_scale = max(scale, 1.0)
+    support = 2.0 * kernel_scale
+    weights = np.zeros((output_size, input_size), dtype=np.float32)
+
+    for output_index in range(output_size):
+        center = (output_index + 0.5) * scale
+        first = int(np.floor(center - support + 0.5))
+        last = int(np.ceil(center + support - 0.5))
+        indices = np.arange(first, last + 1)
+        indices = indices[(indices >= 0) & (indices < input_size)]
+        coefficients = _cubic_kernel(
+            (indices.astype(np.float64) + 0.5 - center) / kernel_scale
+        )
+        coefficients /= coefficients.sum()
+        weights[output_index, indices] = coefficients.astype(np.float32)
+
+    return mx.array(weights)
 
 
 class _PatchProjection(nn.Module):
@@ -174,20 +205,18 @@ class PatchEmbed(nn.Module):
             self.base_grid_size,
             self.embed_dim,
         )
-        resize = nn.Upsample(
-            scale_factor=(
-                grid_height / self.base_grid_size,
-                grid_width / self.base_grid_size,
-            ),
-            mode="cubic",
-            align_corners=False,
+        height_weights = _antialiased_bicubic_matrix(
+            self.base_grid_size, grid_height
         )
-        patch_positions = resize(patch_positions)
-        if patch_positions.shape[1:3] != (grid_height, grid_width):
-            raise RuntimeError(
-                "Position interpolation produced "
-                f"{patch_positions.shape[1:3]}, expected {(grid_height, grid_width)}"
-            )
+        width_weights = _antialiased_bicubic_matrix(
+            self.base_grid_size, grid_width
+        )
+        patch_positions = mx.einsum(
+            "yh,bhwc->bywc", height_weights, patch_positions
+        )
+        patch_positions = mx.einsum(
+            "xw,bywc->byxc", width_weights, patch_positions
+        )
         return class_position, patch_positions.reshape(
             1,
             grid_height * grid_width,
