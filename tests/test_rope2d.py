@@ -33,10 +33,12 @@ def test_rope2d_matches_analytic_four_dimensional_rotation():
         [
             [
                 [
-                    1.0 * cosine - 2.0 * sine,
-                    2.0 * cosine + 1.0 * sine,
-                    3.0 * cosine - 4.0 * sine,
-                    4.0 * cosine + 3.0 * sine,
+                    [
+                        1.0 * cosine - 2.0 * sine,
+                        2.0 * cosine + 1.0 * sine,
+                        3.0 * cosine - 4.0 * sine,
+                        4.0 * cosine + 3.0 * sine,
+                    ]
                 ]
             ]
         ],
