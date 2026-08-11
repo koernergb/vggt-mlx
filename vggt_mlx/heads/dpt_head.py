@@ -50,9 +50,12 @@ class ResidualConvUnit(nn.Module):
         self.conv2 = nn.Conv2d(features, features, 3, padding=1)
 
     def __call__(self, x):
-        residual = self.conv1(nn.relu(x))
+        # Upstream uses an in-place ReLU, so its skip tensor has already been
+        # rectified by the time it is added back. Preserve that exact behavior.
+        skip = nn.relu(x)
+        residual = self.conv1(skip)
         residual = self.conv2(nn.relu(residual))
-        return residual + x
+        return residual + skip
 
 
 class FeatureFusionBlock(nn.Module):
