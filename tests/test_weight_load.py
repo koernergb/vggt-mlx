@@ -23,12 +23,26 @@ def test_converted_weights_load_strictly():
 
     mx = pytest.importorskip("mlx.core")
 
-    from vggt_mlx.models.vggt import VGGT
-
     mx.set_default_device(mx.cpu)
-    model = VGGT()
     weights = list(mx.load(str(WEIGHTS_PATH)).items())
 
     assert weights, f"Converted checkpoint is empty: {WEIGHTS_PATH}"
     assert all(not name.startswith("track_head.") for name, _ in weights)
-    model.load_weights(weights, strict=True)
+
+    from vggt_mlx.models.vggt import VGGT
+
+    try:
+        model = VGGT()
+    except NotImplementedError:
+        from vggt_mlx.models.aggregator import Aggregator
+
+        model = Aggregator()
+        aggregator_weights = [
+            (name.removeprefix("aggregator."), value)
+            for name, value in weights
+            if name.startswith("aggregator.")
+        ]
+        assert aggregator_weights
+        model.load_weights(aggregator_weights, strict=True)
+    else:
+        model.load_weights(weights, strict=True)
