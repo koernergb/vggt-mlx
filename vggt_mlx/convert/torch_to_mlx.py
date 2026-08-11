@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import argparse
 import ast
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Iterator, Iterable, Mapping, Optional
 
 
 MODEL_PREFIXES = ("aggregator.", "camera_head.", "depth_head.", "point_head.")
@@ -89,22 +90,43 @@ def unwrap_state_dict(checkpoint: Any) -> Mapping[str, Any]:
     return checkpoint
 
 
-def load_checkpoint(torch: Any, checkpoint_path: Path) -> Mapping[str, Any]:
+@contextmanager
+def open_checkpoint(
+    torch: Any, checkpoint_path: Path
+) -> Iterator[Mapping[str, Any]]:
+    """Open a checkpoint without eagerly materializing safetensors weights."""
     if checkpoint_path.suffix == ".safetensors":
         try:
-            from safetensors.torch import load_file
+            from safetensors import safe_open
         except ImportError as error:
             raise RuntimeError(
                 "Reading a PyTorch safetensors checkpoint requires `safetensors`"
             ) from error
-        return load_file(str(checkpoint_path), device="cpu")
+
+        with safe_open(checkpoint_path, framework="pt", device="cpu") as handle:
+            keys = tuple(handle.keys())
+
+            class LazyStateDict(Mapping[str, Any]):
+                def __getitem__(self, key: str) -> Any:
+                    if key not in keys:
+                        raise KeyError(key)
+                    return handle.get_tensor(key)
+
+                def __iter__(self) -> Iterator[str]:
+                    return iter(keys)
+
+                def __len__(self) -> int:
+                    return len(keys)
+
+            yield LazyStateDict()
+        return
 
     checkpoint = torch.load(
         checkpoint_path,
         map_location="cpu",
         weights_only=True,
     )
-    return unwrap_state_dict(checkpoint)
+    yield unwrap_state_dict(checkpoint)
 
 
 def instantiate_reference_model(torch: Any) -> Any:
@@ -220,7 +242,10 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--checkpoint",
         type=Path,
-        help="Local model.pt or model.safetensors; downloads model.pt when omitted",
+        help=(
+            "Local model.pt or model.safetensors; downloads model.safetensors "
+            "when omitted"
+        ),
     )
     parser.add_argument("--model-id", default="facebook/VGGT-1B")
     parser.add_argument(
@@ -257,24 +282,24 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     checkpoint_path = args.checkpoint
     if checkpoint_path is None:
         checkpoint_path = Path(
-            hf_hub_download(repo_id=args.model_id, filename="model.pt")
+            hf_hub_download(repo_id=args.model_id, filename="model.safetensors")
         )
     if not checkpoint_path.is_file():
         raise SystemExit(f"Checkpoint does not exist: {checkpoint_path}")
 
-    state_dict = load_checkpoint(torch, checkpoint_path)
     reference_model = instantiate_reference_model(torch)
     expected_shapes = parse_shape_inventory(args.state_dict_keys)
 
-    converted, report = convert_torch_to_mlx(
-        state_dict,
-        reference_model,
-        mx,
-        torch_nn,
-        expected_shapes=expected_shapes,
-        source=str(checkpoint_path),
-        output=str(args.output),
-    )
+    with open_checkpoint(torch, checkpoint_path) as state_dict:
+        converted, report = convert_torch_to_mlx(
+            state_dict,
+            reference_model,
+            mx,
+            torch_nn,
+            expected_shapes=expected_shapes,
+            source=str(checkpoint_path),
+            output=str(args.output),
+        )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.report.parent.mkdir(parents=True, exist_ok=True)
