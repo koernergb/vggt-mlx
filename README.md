@@ -54,11 +54,20 @@ pip install -e '.[dev]'
 ### 2. Install upstream VGGT and convert the weights
 
 ```bash
-git clone --depth 1 https://github.com/facebookresearch/vggt.git /tmp/upstream-vggt
-pip install -e /tmp/upstream-vggt
+UPSTREAM_VGGT_DIR="$(mktemp -d /tmp/facebook-vggt.XXXXXX)"
+
+git clone --depth 1 \
+  https://github.com/facebookresearch/vggt.git \
+  "$UPSTREAM_VGGT_DIR"
+
+python -m pip install -e "$UPSTREAM_VGGT_DIR"
+
+python -c "from vggt.models.vggt import VGGT; print('Upstream VGGT installed successfully')"
 
 python -m vggt_mlx.convert.torch_to_mlx
 ```
+
+Using a freshly generated temporary directory makes this setup safe to rerun, even if an older or incomplete VGGT checkout already exists under `/tmp`. The verification command must print `Upstream VGGT installed successfully` before conversion begins.
 
 The converter downloads the official checkpoint from Hugging Face, reads it lazily, converts PyTorch convolution layouts, omits the tracking head, and creates:
 
@@ -69,6 +78,9 @@ weights/
 ```
 
 A valid conversion reports **0 unmapped non-tracking keys** and **0 shape mismatches**. Converted weights remain local and are ignored by Git.
+
+> [!NOTE]
+> The Hugging Face unauthenticated-request message is only a rate-limit warning. Set `HF_TOKEN` if desired; it is not required for the public non-commercial checkpoint.
 
 ### 3. Reconstruct a scene
 
