@@ -7,6 +7,7 @@ name = "vggt-mlx"
 version = "0.0.0"
 description = "Apple MLX port of VGGT."
 readme = "README.md"
+license = { file = "LICENSE.txt" }
 requires-python = ">=3.10"
 dependencies = [
     "mlx>=0.31",

@@ -181,6 +181,9 @@ Implementation milestones, acceptance gates, and upstream architecture notes liv
 
 ## Model weights and terms
 
+The source in this repository is distributed under the [VGGT License](LICENSE.txt), including its
+acceptable-use restrictions and redistribution requirements.
+
 Model weights are **not distributed** by this repository and retain their original terms:
 
 - `facebook/VGGT-1B` is licensed under **CC-BY-NC-4.0** and is restricted to non-commercial use.
