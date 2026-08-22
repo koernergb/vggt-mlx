@@ -1,0 +1,62 @@
+{
+  "schema_version": "vggt-mlx-baseline/1.0",
+  "captured_at_utc": "2026-08-22T03:52:39Z",
+  "git": {
+    "revision": "c870577",
+    "dirty": false
+  },
+  "environment": {
+    "hardware": "Apple M4",
+    "model_identifier": "Mac16,1",
+    "unified_memory_gb": 16,
+    "macos_version": "26.1",
+    "macos_build": "25B78",
+    "python_version": "3.12.13",
+    "mlx_version": "0.32.0",
+    "numpy_version": "1.26.4",
+    "pytest_version": "9.1.1"
+  },
+  "checkpoint": {
+    "source_repo": "facebook/VGGT-1B",
+    "source_revision": "860abec7937da0a4c03c41d3c269c366e82abdf9",
+    "converted_path": "weights/vggt-1b-mlx.safetensors",
+    "converted_sha256": "a756ff27e3e8c23d7af113ddb8a49ad692389c8d2cf0de333833c1580ccaf58d",
+    "mapped_keys": 1403,
+    "skipped_tracking_keys": 394,
+    "unmapped_non_tracking_keys": 0,
+    "shape_mismatches": 0
+  },
+  "oracles": {
+    "tests/fixtures/oracle_1view.npz": "0e4ed2698f1cee153ab28d411ab678571587b895c76f36e0b49bd53c8e499163",
+    "tests/fixtures/oracle_3view.npz": "8312fe778d1650f7aa3404916691a1b48900260c9d2ab1701374ba9119a44543"
+  },
+  "tests": {
+    "command": ".venv/bin/pytest -q",
+    "passed": 43,
+    "failed": 0,
+    "duration_seconds": 75.85
+  },
+  "fp32_parity": {
+    "dino_patch_tokens_max_abs": 0.000138,
+    "aggregator_layer_23_max_abs": 0.00141,
+    "camera_pose_max_abs": 3.88e-7,
+    "depth_head_max_abs": 0.0000104,
+    "depth_confidence_correlation_min": 0.99999999999
+  },
+  "canonical_demo": {
+    "command": ".venv/bin/python demo.py tests/fixtures/sample_images/view_0.jpg tests/fixtures/sample_images/view_1.jpg",
+    "precision": "fp32",
+    "views": 2,
+    "elapsed_ms_per_frame": 1074.2,
+    "inputs": {
+      "tests/fixtures/sample_images/view_0.jpg": "56d2db6b2c7ddd529b1317260482e546906269ad908922d27c69796414e60041",
+      "tests/fixtures/sample_images/view_1.jpg": "2d2342001aae9e9dcaa7ab0343f482556e69d8c65357a34226c15d40dddb86f7"
+    },
+    "outputs": {
+      "output/depth_00.png": "720e9ebc7573b2629f3c7c7ac9cfeafae9a1b8505ca36e4a2d6e76491244dd63",
+      "output/depth_01.png": "ff2d8168dd353edc15dd56020975e2e90365581ef1cd17017672e462a98b1543",
+      "output/points.ply": "c373b19c98bba65bd26c14ee1e492e65903537eafdd07f9f16ebeecd70d4ba50"
+    },
+    "note": "Generated outputs are reproducible local artifacts and remain ignored by git. This single run is baseline evidence, not a public benchmark."
+  }
+}
