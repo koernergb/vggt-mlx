@@ -205,18 +205,20 @@ class PatchEmbed(nn.Module):
             self.base_grid_size,
             self.embed_dim,
         )
-        height_weights = _antialiased_bicubic_matrix(
-            self.base_grid_size, grid_height
-        )
-        width_weights = _antialiased_bicubic_matrix(
-            self.base_grid_size, grid_width
-        )
-        patch_positions = mx.einsum(
-            "yh,bhwc->bywc", height_weights, patch_positions
-        )
-        patch_positions = mx.einsum(
-            "xw,bywc->byxc", width_weights, patch_positions
-        )
+        if grid_height != self.base_grid_size:
+            height_weights = _antialiased_bicubic_matrix(
+                self.base_grid_size, grid_height
+            )
+            patch_positions = mx.einsum(
+                "yh,bhwc->bywc", height_weights, patch_positions
+            )
+        if grid_width != self.base_grid_size:
+            width_weights = _antialiased_bicubic_matrix(
+                self.base_grid_size, grid_width
+            )
+            patch_positions = mx.einsum(
+                "xw,bywc->byxc", width_weights, patch_positions
+            )
         return class_position, patch_positions.reshape(
             1,
             grid_height * grid_width,

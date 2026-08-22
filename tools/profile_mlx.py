@@ -10,6 +10,7 @@ from statistics import median
 import mlx.core as mx
 import mlx.nn as nn
 
+from vggt_mlx.models.aggregator import slice_expand_and_flatten
 from vggt_mlx.models.vggt import VGGT
 from vggt_mlx.utils.load_fn import load_and_preprocess_images
 from vggt_mlx.utils.pose_enc import pose_encoding_to_extri_intri
@@ -100,6 +101,69 @@ def main():
     mx.eval(pose_forward(images))
     mx.eval(legacy_pose_forward(images))
 
+    aggregator = model.aggregator
+    batch, frames, height, width, _ = images.shape
+    mean = mx.array([0.485, 0.456, 0.406], dtype=images.dtype)
+    std = mx.array([0.229, 0.224, 0.225], dtype=images.dtype)
+    normalized = ((images - mean) / std).reshape(
+        batch * frames, height, width, 3
+    )
+    patch_tokens, patch_embed_ms = timed(
+        lambda: aggregator.patch_embed(normalized), trials=args.trials
+    )
+    camera_token = slice_expand_and_flatten(
+        aggregator.camera_token, batch, frames
+    )
+    register_token = slice_expand_and_flatten(
+        aggregator.register_token, batch, frames
+    )
+    block_tokens = mx.concatenate(
+        (camera_token, register_token, patch_tokens), axis=1
+    )
+    patch_positions = aggregator.position_getter(
+        batch * frames,
+        height // aggregator.patch_size,
+        width // aggregator.patch_size,
+    ) + 1
+    special_positions = mx.zeros(
+        (batch * frames, aggregator.patch_start_idx, 2),
+        dtype=patch_positions.dtype,
+    )
+    block_positions = mx.concatenate(
+        (special_positions, patch_positions), axis=1
+    )
+    block = aggregator.frame_blocks[0]
+    norm1 = (
+        mx.compile(block.norm1, inputs=block.norm1.state)
+        if args.compile
+        else block.norm1
+    )
+    attention_function = lambda value: block.attn(value, pos=block_positions)
+    attention = (
+        mx.compile(attention_function, inputs=block.attn.state)
+        if args.compile
+        else attention_function
+    )
+    norm2 = (
+        mx.compile(block.norm2, inputs=block.norm2.state)
+        if args.compile
+        else block.norm2
+    )
+    mlp = (
+        mx.compile(block.mlp, inputs=block.mlp.state)
+        if args.compile
+        else block.mlp
+    )
+    normed1 = norm1(block_tokens)
+    attended = attention(normed1)
+    residual = block_tokens + block.ls1(attended)
+    normed2 = norm2(residual)
+    mx.eval(normed1, attended, residual, normed2, mlp(normed2))
+    _, norm1_ms = timed(lambda: norm1(block_tokens), trials=args.trials)
+    _, attention_ms = timed(lambda: attention(normed1), trials=args.trials)
+    _, norm2_ms = timed(lambda: norm2(residual), trials=args.trials)
+    _, mlp_ms = timed(lambda: mlp(normed2), trials=args.trials)
+
     aggregated, aggregator_ms = timed(
         lambda: model.aggregator(images), trials=args.trials
     )
@@ -125,6 +189,11 @@ def main():
 
     stages = {
         "aggregator": aggregator_ms,
+        "dino_backbone": patch_embed_ms,
+        "block_norm1": norm1_ms,
+        "block_attention": attention_ms,
+        "block_norm2": norm2_ms,
+        "block_mlp": mlp_ms,
         "camera_head": camera_ms,
         "depth_head": depth_ms,
         "point_head": point_ms,
