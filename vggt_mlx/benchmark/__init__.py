@@ -1,6 +1,10 @@
 """Reproducible benchmark and parity result primitives."""
 
-from vggt_mlx.benchmark.adapters import MLXAdapter, PUBLIC_OUTPUTS, PyTorchMPSAdapter
+from vggt_mlx.benchmark.adapters import (
+    MLXAdapter,
+    PUBLIC_OUTPUTS,
+    PyTorchMPSAdapter,
+)
 from vggt_mlx.benchmark.parity import (
     PARITY_POLICY_VERSION,
     ParityMetrics,

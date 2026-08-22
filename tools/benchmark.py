@@ -80,15 +80,16 @@ def main() -> None:
         shared = shared.astype(np.float32, copy=False)
         for framework in frameworks:
             framework_name = "mlx" if framework == "mlx" else "pytorch-mps"
+            precision = "fp32"
             run_id = planned_run_id(
                 repository=ROOT,
                 framework=framework_name,
-                precision="fp32",
+                precision=precision,
                 shared_input=shared,
                 checkpoint_revision=REVISION,
             )
             print(
-                f"{framework_name:11s} fp32 views={view_count} "
+                f"{framework_name:11s} {precision} views={view_count} "
                 f"shape={tuple(shared.shape)} run={run_id}"
             )
             if run_id in completed and not args.replace:

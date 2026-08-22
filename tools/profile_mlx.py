@@ -8,6 +8,7 @@ from pathlib import Path
 from statistics import median
 
 import mlx.core as mx
+import mlx.nn as nn
 
 from vggt_mlx.models.vggt import VGGT
 from vggt_mlx.utils.load_fn import load_and_preprocess_images
@@ -34,6 +35,10 @@ def parse_args():
     parser.add_argument("--trials", type=int, default=5)
     parser.add_argument("--compile", action="store_true")
     parser.add_argument(
+        "--precision", choices=("fp32", "fp16", "bf16"), default="fp32"
+    )
+    parser.add_argument("--quantize", type=int, choices=(4, 6, 8))
+    parser.add_argument(
         "--weights", type=Path, default=ROOT / "weights" / "vggt-1b-mlx.safetensors"
     )
     return parser.parse_args()
@@ -46,13 +51,37 @@ def main():
         images = images[None]
     model = VGGT()
     model.load_weights(list(mx.load(str(args.weights)).items()), strict=True)
+    dtype = {"fp32": mx.float32, "fp16": mx.float16, "bf16": mx.bfloat16}[
+        args.precision
+    ]
+    model.set_dtype(dtype)
+    if args.quantize:
+        nn.quantize(
+            model,
+            group_size=64,
+            bits=args.quantize,
+            class_predicate=lambda _path, module: (
+                isinstance(module, nn.Linear) and module.weight.shape[-1] % 64 == 0
+            ),
+        )
+    images = images.astype(dtype)
     model.eval()
     mx.eval(model.parameters())
     forward = mx.compile(model, inputs=model.state) if args.compile else model
+    demo_function = lambda value: model(
+        value,
+        outputs=("pose_enc", "depth", "depth_conf", "extrinsic", "intrinsic"),
+    )
+    demo_forward = (
+        mx.compile(demo_function, inputs=model.state)
+        if args.compile
+        else demo_function
+    )
 
     # Untimed warmup establishes kernels and memory allocations.
     warmup = forward(images)
     mx.eval(warmup)
+    mx.eval(demo_forward(images))
 
     aggregated, aggregator_ms = timed(
         lambda: model.aggregator(images), trials=args.trials
@@ -71,6 +100,7 @@ def main():
         trials=args.trials,
     )
     _, full_ms = timed(lambda: forward(images), trials=args.trials)
+    _, demo_ms = timed(lambda: demo_forward(images), trials=args.trials)
 
     stages = {
         "aggregator": aggregator_ms,
@@ -79,6 +109,7 @@ def main():
         "point_head": point_ms,
         "camera_geometry": geometry_ms,
         "full_forward": full_ms,
+        "demo_forward": demo_ms,
     }
     for name, samples in stages.items():
         print(

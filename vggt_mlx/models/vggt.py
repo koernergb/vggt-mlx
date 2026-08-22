@@ -21,32 +21,60 @@ class VGGT(nn.Module):
         self.depth_head = DPTHead(output_dim=2, activation="exp")
         self.point_head = DPTHead(output_dim=4, activation="inv_log")
 
-    def forward(self, images):
+    OUTPUT_ORDER = (
+        "pose_enc",
+        "depth",
+        "depth_conf",
+        "world_points",
+        "world_points_conf",
+        "extrinsic",
+        "intrinsic",
+    )
+    OUTPUT_NAMES = frozenset(OUTPUT_ORDER)
+
+    def forward(self, images, outputs=None):
         if images.ndim == 4:
             images = images[None]
         if images.ndim != 5 or images.shape[-1] != 3:
             raise ValueError(f"Expected [B,S,H,W,3] or [S,H,W,3], got {images.shape}")
 
+        requested = self.OUTPUT_NAMES if outputs is None else frozenset(outputs)
+        unknown = requested - self.OUTPUT_NAMES
+        if unknown:
+            raise ValueError(f"Unknown VGGT outputs: {sorted(unknown)}")
+        if not requested:
+            raise ValueError("At least one VGGT output must be requested")
+
         aggregated, patch_start_idx = self.aggregator(images)
-        pose_enc = self.camera_head(aggregated)[-1]
-        depth, depth_conf = self.depth_head(
-            aggregated, images, patch_start_idx
-        )
-        world_points, world_points_conf = self.point_head(
-            aggregated, images, patch_start_idx
-        )
-        extrinsic, intrinsic = pose_encoding_to_extri_intri(
-            pose_enc, image_size_hw=tuple(int(size) for size in images.shape[2:4])
-        )
+        prediction = {}
+        camera_outputs = {"pose_enc", "extrinsic", "intrinsic"}
+        if requested & camera_outputs:
+            pose_enc = self.camera_head(aggregated)[-1]
+            prediction["pose_enc"] = pose_enc
+            if requested & {"extrinsic", "intrinsic"}:
+                extrinsic, intrinsic = pose_encoding_to_extri_intri(
+                    pose_enc,
+                    image_size_hw=tuple(int(size) for size in images.shape[2:4]),
+                )
+                prediction["extrinsic"] = extrinsic
+                prediction["intrinsic"] = intrinsic
+        if requested & {"depth", "depth_conf"}:
+            depth, depth_conf = self.depth_head(
+                aggregated, images, patch_start_idx
+            )
+            prediction["depth"] = depth
+            prediction["depth_conf"] = depth_conf
+        if requested & {"world_points", "world_points_conf"}:
+            world_points, world_points_conf = self.point_head(
+                aggregated, images, patch_start_idx
+            )
+            prediction["world_points"] = world_points
+            prediction["world_points_conf"] = world_points_conf
         return {
-            "pose_enc": pose_enc,
-            "depth": depth,
-            "depth_conf": depth_conf,
-            "world_points": world_points,
-            "world_points_conf": world_points_conf,
-            "extrinsic": extrinsic,
-            "intrinsic": intrinsic,
+            name: prediction[name]
+            for name in self.OUTPUT_ORDER
+            if name in requested
         }
 
-    def __call__(self, images):
-        return self.forward(images)
+    def __call__(self, images, outputs=None):
+        return self.forward(images, outputs=outputs)

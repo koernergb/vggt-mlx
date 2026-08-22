@@ -179,12 +179,18 @@ class MLXAdapter:
     precision = "fp32"
     output_names = PUBLIC_OUTPUTS
 
-    def __init__(self, model: Any, *, compile: bool = True) -> None:
+    def __init__(
+        self,
+        model: Any,
+        *,
+        compile: bool = True,
+    ) -> None:
         import mlx.core as mx
 
         self.mx = mx
         self.model = model
         self.model.eval()
+        self.precision = "fp32"
         self.compiled = compile
         self.forward = (
             mx.compile(model, inputs=model.state) if compile else model

@@ -89,7 +89,13 @@ def main() -> None:
     model.eval()
 
     started = time.perf_counter()
-    predictions = model(images)
+    # The exported PLY is built by unprojecting depth with predicted cameras,
+    # which upstream recommends over the learned point head. Do not run that
+    # unused head.
+    predictions = model(
+        images,
+        outputs=("pose_enc", "depth", "depth_conf", "extrinsic", "intrinsic"),
+    )
     mx.eval(*predictions.values())
     elapsed = time.perf_counter() - started
 
