@@ -193,6 +193,10 @@ Always review the current upstream model card and license before downloading, co
 
 ## Scope and roadmap
 
+The implementation plan for benchmarking, reduced precision, packaging,
+Hugging Face distribution, and the public launch is in
+[`docs/RELEASE_ROADMAP.md`](docs/RELEASE_ROADMAP.md).
+
 - [x] DINOv2 patch backbone
 - [x] Alternating frame/global aggregator
 - [x] Camera, depth, and point heads
