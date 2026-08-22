@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/koernergb/vggt-mlx/release/schemas/parity-v1.json",
+  "title": "VGGT-MLX parity result v1",
+  "type": "object",
+  "required": [
+    "schema_version", "run_id", "timestamp_utc", "git", "environment",
+    "workload", "reference", "candidate", "policy_version", "taps",
+    "status", "first_failure"
+  ],
+  "properties": {
+    "schema_version": {"const": "vggt-mlx-parity-result/1.0"},
+    "policy_version": {"const": "vggt-mlx-parity/1.0"},
+    "status": {"enum": ["pass", "fail"]}
+  },
+  "additionalProperties": true
+}

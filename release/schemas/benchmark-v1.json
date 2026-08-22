@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/koernergb/vggt-mlx/release/schemas/benchmark-v1.json",
+  "title": "VGGT-MLX benchmark result v1",
+  "type": "object",
+  "required": [
+    "schema_version", "run_id", "timestamp_utc", "git", "environment",
+    "workload", "framework", "precision", "warmup_trials", "samples_ms",
+    "summary", "validity"
+  ],
+  "properties": {
+    "schema_version": {"const": "vggt-mlx-benchmark/1.0"},
+    "run_id": {"type": "string", "minLength": 1},
+    "timestamp_utc": {"type": "string"},
+    "samples_ms": {"type": "array", "minItems": 1, "items": {"type": "number", "minimum": 0}}
+  },
+  "additionalProperties": true
+}
