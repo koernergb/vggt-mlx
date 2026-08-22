@@ -1,5 +1,6 @@
 """Reproducible benchmark and parity result primitives."""
 
+from vggt_mlx.benchmark.adapters import MLXAdapter, PUBLIC_OUTPUTS, PyTorchMPSAdapter
 from vggt_mlx.benchmark.parity import (
     PARITY_POLICY_VERSION,
     ParityMetrics,
@@ -19,9 +20,12 @@ from vggt_mlx.benchmark.schema import (
 
 __all__ = [
     "BENCHMARK_SCHEMA_VERSION",
+    "MLXAdapter",
     "PARITY_POLICY_VERSION",
     "PARITY_SCHEMA_VERSION",
     "ParityMetrics",
+    "PUBLIC_OUTPUTS",
+    "PyTorchMPSAdapter",
     "ResultValidationError",
     "TapComparison",
     "camera_rotation_geodesic_degrees",
