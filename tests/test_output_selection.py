@@ -44,3 +44,23 @@ def test_output_selection_rejects_empty_or_unknown_requests():
         model(images, outputs=())
     with pytest.raises(ValueError, match="Unknown"):
         model(images, outputs=("tracks",))
+
+
+def test_pose_only_selection_matches_full_forward():
+    if not WEIGHTS.is_file():
+        pytest.skip("converted weights are required for output-selection parity")
+    mx = pytest.importorskip("mlx.core")
+    from vggt_mlx.models.vggt import VGGT
+
+    mx.set_default_device(mx.cpu)
+    model = VGGT()
+    model.load_weights(list(mx.load(str(WEIGHTS)).items()), strict=True)
+    model.eval()
+    with np.load(ORACLE) as fixture:
+        images = mx.array(
+            fixture["input"].transpose(0, 1, 3, 4, 2).astype(np.float32)
+        )
+    full_pose = model(images)["pose_enc"]
+    selected_pose = model(images, outputs=("pose_enc",))["pose_enc"]
+    mx.eval(full_pose, selected_pose)
+    np.testing.assert_array_equal(selected_pose, full_pose)

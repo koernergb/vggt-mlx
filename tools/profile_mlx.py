@@ -77,11 +77,28 @@ def main():
         if args.compile
         else demo_function
     )
+    pose_function = lambda value: model(value, outputs=("pose_enc",))
+    pose_forward = (
+        mx.compile(pose_function, inputs=model.state)
+        if args.compile
+        else pose_function
+    )
+    def legacy_pose_function(value):
+        tokens, _ = model.aggregator(value)
+        return model.camera_head(tokens)[-1]
+
+    legacy_pose_forward = (
+        mx.compile(legacy_pose_function, inputs=model.state)
+        if args.compile
+        else legacy_pose_function
+    )
 
     # Untimed warmup establishes kernels and memory allocations.
     warmup = forward(images)
     mx.eval(warmup)
     mx.eval(demo_forward(images))
+    mx.eval(pose_forward(images))
+    mx.eval(legacy_pose_forward(images))
 
     aggregated, aggregator_ms = timed(
         lambda: model.aggregator(images), trials=args.trials
@@ -101,6 +118,10 @@ def main():
     )
     _, full_ms = timed(lambda: forward(images), trials=args.trials)
     _, demo_ms = timed(lambda: demo_forward(images), trials=args.trials)
+    _, pose_ms = timed(lambda: pose_forward(images), trials=args.trials)
+    _, legacy_pose_ms = timed(
+        lambda: legacy_pose_forward(images), trials=args.trials
+    )
 
     stages = {
         "aggregator": aggregator_ms,
@@ -110,6 +131,8 @@ def main():
         "camera_geometry": geometry_ms,
         "full_forward": full_ms,
         "demo_forward": demo_ms,
+        "pose_forward": pose_ms,
+        "legacy_pose": legacy_pose_ms,
     }
     for name, samples in stages.items():
         print(

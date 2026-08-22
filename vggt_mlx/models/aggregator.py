@@ -162,7 +162,7 @@ class Aggregator(nn.Module):
             )
         return tokens, positions, block_index, intermediates
 
-    def __call__(self, images):
+    def __call__(self, images, cached_layer_indices=None):
         if images.ndim != 5 or images.shape[-1] != 3:
             raise ValueError(f"Aggregator expects [B,S,H,W,3], got {images.shape}")
         batch_size, num_frames, height, width, _ = images.shape
@@ -213,6 +213,14 @@ class Aggregator(nn.Module):
             axis=1,
         )
 
+        cached_layer_indices = (
+            self.cached_layer_indices
+            if cached_layer_indices is None
+            else frozenset(cached_layer_indices)
+        )
+        if not cached_layer_indices <= set(range(self.depth)):
+            raise ValueError("cached_layer_indices contains an invalid layer")
+
         frame_index = 0
         global_index = 0
         outputs = []
@@ -244,7 +252,7 @@ class Aggregator(nn.Module):
                 global_intermediates,
             ):
                 layer_index = len(outputs)
-                if layer_index in self.cached_layer_indices:
+                if layer_index in cached_layer_indices:
                     outputs.append(
                         mx.concatenate((frame_tokens, global_tokens), axis=-1)
                     )

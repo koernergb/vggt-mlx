@@ -45,9 +45,22 @@ class VGGT(nn.Module):
         if not requested:
             raise ValueError("At least one VGGT output must be requested")
 
-        aggregated, patch_start_idx = self.aggregator(images)
-        prediction = {}
         camera_outputs = {"pose_enc", "extrinsic", "intrinsic"}
+        dense_outputs = {
+            "depth",
+            "depth_conf",
+            "world_points",
+            "world_points_conf",
+        }
+        cached_layers = (
+            None
+            if requested & dense_outputs
+            else (self.aggregator.depth - 1,)
+        )
+        aggregated, patch_start_idx = self.aggregator(
+            images, cached_layer_indices=cached_layers
+        )
+        prediction = {}
         if requested & camera_outputs:
             pose_enc = self.camera_head(aggregated)[-1]
             prediction["pose_enc"] = pose_enc
