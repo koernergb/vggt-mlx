@@ -21,6 +21,9 @@
 
 `vggt-mlx` is an fp32 [MLX](https://github.com/ml-explore/mlx) port of Facebook Research's [VGGT](https://github.com/facebookresearch/vggt), the CVPR 2025 best-paper model for feed-forward 3D reconstruction. Give it one to four related images and it returns camera parameters, depth, confidence, and world-space points.
 
+This is an **unofficial community port** and is not affiliated with or endorsed
+by Meta, Apple, or the MLX team.
+
 > [!IMPORTANT]
 > This repository ships conversion code, not model weights. The original `facebook/VGGT-1B` checkpoint is non-commercial; read [Model weights and terms](#model-weights-and-terms) before use.
 
@@ -190,6 +193,25 @@ Model weights are **not distributed** by this repository and retain their origin
 - Commercial users must obtain the gated `VGGT-1B-Commercial` checkpoint and comply with its additional restrictions, including its prohibition on military use.
 
 Always review the current upstream model card and license before downloading, converting, or deploying a checkpoint.
+
+The artifact-by-artifact publication policy, attribution requirements, and
+current sample-image blocker are documented in
+[`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md).
+
+## Citation
+
+If this port contributes to published work, cite the original VGGT paper:
+
+```bibtex
+@inproceedings{wang2025vggt,
+  title     = {VGGT: Visual Geometry Grounded Transformer},
+  author    = {Wang, Jianyuan and Chen, Minghao and Karaev, Nikita and
+               Vedaldi, Andrea and Rupprecht, Christian and Novotny, David},
+  booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and
+               Pattern Recognition},
+  year      = {2025}
+}
+```
 
 ## Scope and roadmap
 
