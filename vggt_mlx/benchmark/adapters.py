@@ -30,6 +30,7 @@ class PyTorchMPSAdapter:
 
     framework = "pytorch-mps"
     precision = "fp32"
+    output_names = PUBLIC_OUTPUTS
 
     def __init__(
         self,
@@ -54,6 +55,7 @@ class PyTorchMPSAdapter:
 
             pose_decoder = pose_encoding_to_extri_intri
         self.pose_decoder = pose_decoder
+        self.last_peak_memory_mb: float | None = None
 
     @classmethod
     def from_pretrained(
@@ -96,6 +98,21 @@ class PyTorchMPSAdapter:
     def synchronize(self) -> None:
         if self.device.type == "mps":
             self.torch.mps.synchronize()
+
+    def reset_peak_memory(self) -> None:
+        self.last_peak_memory_mb = None
+
+    def capture_peak_memory(self) -> None:
+        if self.device.type != "mps":
+            return
+        values = []
+        for name in ("current_allocated_memory", "driver_allocated_memory"):
+            function = getattr(self.torch.mps, name, None)
+            if function is not None:
+                values.append(float(function()) / 1024**2)
+        if values:
+            current = max(values)
+            self.last_peak_memory_mb = max(self.last_peak_memory_mb or 0.0, current)
 
     def prepare_input(self, shared_images: np.ndarray) -> Any:
         images = np.asarray(shared_images)
@@ -160,6 +177,7 @@ class MLXAdapter:
 
     framework = "mlx"
     precision = "fp32"
+    output_names = PUBLIC_OUTPUTS
 
     def __init__(self, model: Any) -> None:
         import mlx.core as mx
@@ -167,6 +185,18 @@ class MLXAdapter:
         self.mx = mx
         self.model = model
         self.model.eval()
+        self.last_peak_memory_mb: float | None = None
+
+    def reset_peak_memory(self) -> None:
+        reset = getattr(self.mx.metal, "reset_peak_memory", None)
+        if reset is not None:
+            reset()
+        self.last_peak_memory_mb = None
+
+    def capture_peak_memory(self) -> None:
+        get_peak = getattr(self.mx.metal, "get_peak_memory", None)
+        if get_peak is not None:
+            self.last_peak_memory_mb = float(get_peak()) / 1024**2
 
     def prepare_input(self, shared_images: np.ndarray) -> Any:
         images = np.asarray(shared_images)

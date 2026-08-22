@@ -17,6 +17,7 @@ from vggt_mlx.benchmark.schema import (
     validate_benchmark_result,
     validate_parity_result,
 )
+from vggt_mlx.benchmark.runner import run_trials, summarize_samples, write_result
 
 __all__ = [
     "BENCHMARK_SCHEMA_VERSION",
@@ -32,6 +33,9 @@ __all__ = [
     "camera_translation_direction_degrees",
     "compare_arrays",
     "compare_taps",
+    "run_trials",
+    "summarize_samples",
     "validate_benchmark_result",
     "validate_parity_result",
+    "write_result",
 ]
