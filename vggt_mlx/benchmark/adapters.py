@@ -179,22 +179,30 @@ class MLXAdapter:
     precision = "fp32"
     output_names = PUBLIC_OUTPUTS
 
-    def __init__(self, model: Any) -> None:
+    def __init__(self, model: Any, *, compile: bool = True) -> None:
         import mlx.core as mx
 
         self.mx = mx
         self.model = model
         self.model.eval()
+        self.compiled = compile
+        self.forward = (
+            mx.compile(model, inputs=model.state) if compile else model
+        )
         self.last_peak_memory_mb: float | None = None
 
     def reset_peak_memory(self) -> None:
-        reset = getattr(self.mx.metal, "reset_peak_memory", None)
+        reset = getattr(self.mx, "reset_peak_memory", None)
+        if reset is None:
+            reset = getattr(self.mx.metal, "reset_peak_memory", None)
         if reset is not None:
             reset()
         self.last_peak_memory_mb = None
 
     def capture_peak_memory(self) -> None:
-        get_peak = getattr(self.mx.metal, "get_peak_memory", None)
+        get_peak = getattr(self.mx, "get_peak_memory", None)
+        if get_peak is None:
+            get_peak = getattr(self.mx.metal, "get_peak_memory", None)
         if get_peak is not None:
             self.last_peak_memory_mb = float(get_peak()) / 1024**2
 
@@ -213,7 +221,7 @@ class MLXAdapter:
         return self.mx.array(np.ascontiguousarray(images))
 
     def forward_tensors(self, prepared_images: Any) -> dict[str, Any]:
-        output = self.model(prepared_images)
+        output = self.forward(prepared_images)
         if set(output) != set(PUBLIC_OUTPUTS):
             raise RuntimeError("MLX output workload does not match the public contract")
         return output

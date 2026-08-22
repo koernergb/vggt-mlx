@@ -43,6 +43,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--results", type=Path, default=ROOT / "results" / "benchmarks")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--replace", action="store_true")
+    parser.add_argument("--no-compile", action="store_true")
     args = parser.parse_args()
     if args.warmups < 0 or args.trials < 1:
         parser.error("warmups must be non-negative and trials must be positive")
@@ -61,7 +62,7 @@ def load_adapter(name: str, args: argparse.Namespace):
             raise SystemExit(f"Converted MLX weights not found: {args.mlx_weights}")
         model = VGGT()
         model.load_weights(list(mx.load(str(args.mlx_weights)).items()), strict=True)
-        return MLXAdapter(model)
+        return MLXAdapter(model, compile=not args.no_compile)
     if not args.torch_weights.is_file():
         raise SystemExit(f"Official PyTorch weights not found: {args.torch_weights}")
     return PyTorchMPSAdapter.from_local_safetensors(args.torch_weights)

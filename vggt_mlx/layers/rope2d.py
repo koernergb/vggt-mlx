@@ -35,15 +35,19 @@ class RotaryPositionEmbedding2D(nn.Module):
         self,
         frequency: float = 100.0,
         scaling_factor: float = 1.0,
+        max_position: int = 512,
     ) -> None:
         super().__init__()
         if frequency <= 0:
             raise ValueError("frequency must be positive")
         if scaling_factor <= 0:
             raise ValueError("scaling_factor must be positive")
+        if max_position < 2:
+            raise ValueError("max_position must be at least 2")
 
         self.base_frequency = float(frequency)
         self.scaling_factor = float(scaling_factor)
+        self.max_position = int(max_position)
         self.frequency_cache: dict[tuple[int, int, str], tuple[Any, Any]] = {}
 
     def _compute_frequency_components(self, dim: int, seq_len: int, dtype):
@@ -93,12 +97,11 @@ class RotaryPositionEmbedding2D(nn.Module):
             )
 
         per_axis_dim = tokens.shape[-1] // 2
-        # Positions are integer grid coordinates. Special tokens use zero while
-        # patch positions are shifted by one in the aggregator.
-        max_position = int(mx.max(positions).item()) + 1
+        # A fixed table removes a GPU-to-host `.item()` synchronization in every
+        # attention block. Gathered rows use exactly the same angles as before.
         cosine, sine = self._compute_frequency_components(
             per_axis_dim,
-            max_position,
+            self.max_position,
             tokens.dtype,
         )
 

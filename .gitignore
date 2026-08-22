@@ -10,3 +10,4 @@ weights/
 *.safetensors
 *.pt
 output/
+results/
